@@ -1,0 +1,347 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "adminUsername": {
+            "minLength": 1,
+            "type": "String",
+            "metadata": {
+                "description": "User name for the Web Server VM."
+            }
+        },
+        "dnsNameForPublicIP": {
+            "minLength": 1,
+            "type": "String",
+            "metadata": {
+                "description": "Globally unique DNS Name for the Public IP used to access the Web Server VM."
+            }
+        },
+        "ubuntuOSVersion": {
+            "defaultValue": "14.04.5-LTS",
+            "allowedValues": [
+                "14.04.5-LTS",
+                "16.04.0-LTS"
+            ],
+            "type": "String",
+            "metadata": {
+                "description": "The Ubuntu version for the Web Server VM. Allowed values: 14.04.5-LTS, 16.04.0-LTS"
+            }
+        },
+        "testPage": {
+            "defaultValue": "index.html",
+            "type": "String",
+            "metadata": {
+                "description": "Test page you want to create on the Web Server."
+            }
+        },
+        "testPageTitle": {
+            "defaultValue": "Test Page",
+            "type": "String",
+            "metadata": {
+                "description": "Test page title."
+            }
+        },
+        "testPageBody": {
+            "defaultValue": "<p>This is a test page.</p>",
+            "type": "String",
+            "metadata": {
+                "description": "Test page content body markup."
+            }
+        },
+        "installPHP": {
+            "defaultValue": false,
+            "type": "Bool",
+            "metadata": {
+                "description": "Set to True to install PHP."
+            }
+        },
+        "_artifactsLocation": {
+            "defaultValue": "https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/ubuntu-apache-test-page/",
+            "type": "String",
+            "metadata": {
+                "description": "The base URI where artifacts required by this template are located. When the template is deployed using the accompanying scripts, a private location in the subscription will be used and this value will be automatically generated."
+            }
+        },
+        "_artifactsLocationSasToken": {
+            "defaultValue": "",
+            "type": "SecureString",
+            "metadata": {
+                "description": "The sasToken required to access _artifactsLocation.  When the template is deployed using the accompanying scripts, a sasToken will be automatically generated."
+            }
+        },
+        "location": {
+            "defaultValue": "[resourceGroup().location]",
+            "type": "String",
+            "metadata": {
+                "description": "Location for all resources."
+            }
+        },
+        "authenticationType": {
+            "defaultValue": "sshPublicKey",
+            "allowedValues": [
+                "sshPublicKey",
+                "password"
+            ],
+            "type": "String",
+            "metadata": {
+                "description": "Type of authentication to use on the Virtual Machine. SSH key is recommended."
+            }
+        },
+        "adminPasswordOrKey": {
+            "type": "SecureString",
+            "metadata": {
+                "description": "SSH Key or password for the Virtual Machine. SSH key is recommended."
+            }
+        },
+        "qty": {
+            "defaultValue": 1,
+            "type": "Int",
+            "metadata": {
+                "description": "Number of VMs to deploy."
+            }
+        }
+    },
+    "variables": {
+        "imagePublisher": "Canonical",
+        "imageOffer": "UbuntuServer",
+        "OSDiskName": "[concat('webtestosdisk-', parameters('dnsNameForPublicIP'))]",
+        "nicName": "[concat('webtestnic-', parameters('dnsNameForPublicIP'), '-', uniqueString(resourceGroup().id))]",
+        "addressPrefix": "10.0.0.0/16",
+        "subnetName": "Subnet",
+        "subnetPrefix": "10.0.0.0/24",
+        "vhdStorageType": "Standard_LRS",
+        "publicIPAddressType": "Dynamic",
+        "vhdStorageContainerName": "vhds",
+        "vmName": "[concat('webtestvm-', parameters('dnsNameForPublicIP'), '-', uniqueString(resourceGroup().id))]",
+        "vmSize": "Standard_D2_v2",
+        "virtualNetworkName": "[concat('webtestvnet-', uniqueString(resourceGroup().id, parameters('dnsNameForPublicIP')))]",
+        "subnetRef": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('virtualNetworkName'),  variables('subnetName'))]",
+        "vhdStorageName": "[concat('webtestvhd', uniqueString(resourceGroup().id, parameters('dnsNameForPublicIP')))]",
+        "singleQuote": "'",
+        "frontEndNSGName": "[concat('webtestnsg-', uniqueString(resourceGroup().id, parameters('dnsNameForPublicIP')))]",
+        "testPageMarkup": "[concat('<html><head><title>', parameters('testPageTitle'), '</title></head><body>', parameters('testPageBody'), '</body></html>')]",
+        "scriptFolder": "scripts",
+        "serverPrepareScriptFileName": "prepwebserver.sh",
+        "linuxConfiguration": {
+            "disablePasswordAuthentication": true,
+            "ssh": {
+                "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('adminPasswordOrKey')]"
+                    }
+                ]
+            }
+        }
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "apiVersion": "2015-06-15",
+            "name": "[variables('vhdStorageName')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "displayName": "StorageAccount"
+            },
+            "properties": {
+                "accountType": "[variables('vhdStorageType')]"
+            }
+        },
+        {
+            "type": "Microsoft.Network/publicIPAddresses",
+            "apiVersion": "2015-06-15",
+            "name": "[concat(parameters('dnsNameForPublicIP'),copyIndex())]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "displayName": "PublicIPAddress"
+            },
+            "properties": {
+                "publicIPAllocationMethod": "[variables('publicIPAddressType')]",
+                "dnsSettings": {
+                    "domainNameLabel": "[concat(parameters('dnsNameForPublicIP'),copyIndex())]"
+                }
+            },
+            "copy": {
+                "name": "publicIpCopy",
+                "count": "[parameters('qty')]"
+            }
+        },
+        {
+            "type": "Microsoft.Network/virtualNetworks",
+            "apiVersion": "2015-06-15",
+            "name": "[variables('virtualNetworkName')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "displayName": "VirtualNetwork"
+            },
+            "properties": {
+                "addressSpace": {
+                    "addressPrefixes": [
+                        "[variables('addressPrefix')]"
+                    ]
+                },
+                "subnets": [
+                    {
+                        "name": "[variables('subnetName')]",
+                        "properties": {
+                            "addressPrefix": "[variables('subnetPrefix')]"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "apiVersion": "2015-06-15",
+            "name": "[variables('frontEndNSGName')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "displayName": "NSG - Web Server"
+            },
+            "properties": {
+                "securityRules": [
+                    {
+                        "name": "ssh-rule",
+                        "properties": {
+                            "description": "Allow SSH",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "22",
+                            "sourceAddressPrefix": "Internet",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 100,
+                            "direction": "Inbound"
+                        }
+                    },
+                    {
+                        "name": "web-rule",
+                        "properties": {
+                            "description": "Allow Web",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "80",
+                            "sourceAddressPrefix": "Internet",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 101,
+                            "direction": "Inbound"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "type": "Microsoft.Network/networkInterfaces",
+            "apiVersion": "2015-06-15",
+            "name": "[concat(variables('nicName'),copyIndex())]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[concat('Microsoft.Network/publicIPAddresses/', parameters('dnsNameForPublicIP'),copyIndex())]",
+                "[concat('Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'))]",
+                "[concat('Microsoft.Network/networkSecurityGroups/', variables('frontEndNSGName'))]"
+            ],
+            "tags": {
+                "displayName": "[concat('NetworkInterface',copyIndex())]"
+            },
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "[concat('ipconfig',copyIndex())]",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "publicIPAddress": {
+                                "id": "[resourceId('Microsoft.Network/publicIPAddresses', concat(parameters('dnsNameForPublicIP'),copyIndex()))]"
+                            },
+                            "subnet": {
+                                "id": "[variables('subnetRef')]"
+                            }
+                        }
+                    }
+                ],
+                "networkSecurityGroup": {
+                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('frontEndNSGName'))]"
+                }
+            },
+            "copy": {
+                "name": "nicCopy",
+                "count": "[parameters('qty')]"
+            }
+        },
+        {
+            "type": "Microsoft.Compute/virtualMachines",
+            "apiVersion": "2017-03-30",
+            "name": "[concat(variables('vmName'),copyIndex())]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[concat('Microsoft.Storage/storageAccounts/', variables('vhdStorageName'))]",
+                "[concat('Microsoft.Network/networkInterfaces/', variables('nicName'),copyIndex())]"
+            ],
+            "tags": {
+                "displayName": "[concat('VirtualMachine',copyIndex())]"
+            },
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "[variables('vmSize')]"
+                },
+                "osProfile": {
+                    "computerName": "[concat(variables('vmName'),copyIndex())]",
+                    "adminUsername": "[parameters('adminUsername')]",
+                    "adminPassword": "[parameters('adminPasswordOrKey')]",
+                    "linuxConfiguration": "[if(equals(parameters('authenticationType'), 'password'), json('null'), variables('linuxConfiguration'))]"
+                },
+                "storageProfile": {
+                    "imageReference": {
+                        "publisher": "[variables('imagePublisher')]",
+                        "offer": "[variables('imageOffer')]",
+                        "sku": "[parameters('ubuntuOSVersion')]",
+                        "version": "latest"
+                    },
+                    "osDisk": {
+                        "name": "[concat(variables('vmName'),'_OSDisk',copyIndex())]",
+                        "caching": "ReadWrite",
+                        "createOption": "FromImage"
+                    }
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('nicName'),copyIndex()))]"
+                        }
+                    ]
+                }
+            },
+            "resources": [
+                {
+                    "type": "extensions",
+                    "apiVersion": "2015-06-15",
+                    "name": "PrepareServer",
+                    "location": "[parameters('location')]",
+                    "dependsOn": [
+                        "[concat('Microsoft.Compute/virtualMachines/', variables('vmName'),copyIndex())]"
+                    ],
+                    "tags": {
+                        "displayName": "PrepareServer"
+                    },
+                    "properties": {
+                        "publisher": "Microsoft.Azure.Extensions",
+                        "type": "CustomScript",
+                        "typeHandlerVersion": "2.0",
+                        "autoUpgradeMinorVersion": true,
+                        "settings": {
+                            "fileUris": [
+                                "[concat(parameters('_artifactsLocation'), '/', variables('scriptFolder'), '/', variables('serverPrepareScriptFileName'), parameters('_artifactsLocationSasToken'))]"
+                            ],
+                            "commandToExecute": "[concat('sh prepwebserver.sh', ' ', string(parameters('installPHP')), ' ', variables('singleQuote'), variables('testPageMarkup'), variables('singleQuote'), ' ', parameters('testPage'), ' ', variables('singleQuote'), parameters('ubuntuOSVersion'), variables('singleQuote'))]"
+                        }
+                    }
+                }
+            ],
+            "copy": {
+                "name": "vmCopy",
+                "count": "[parameters('qty')]"
+            }
+        }
+    ],
+    "outputs": {}
+}
